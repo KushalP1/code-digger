@@ -28,11 +28,9 @@ Then restart your MCP client and run:
 - [Quick copy: Performance investigation](#quick-copy-performance-investigation)
 - [Quick copy: Python deep dive](#quick-copy-python-deep-dive)
 - [Quick copy: Low-token mode](#quick-copy-low-token-mode)
-<<<<<<< HEAD
-=======
 - [Quick copy: PR architecture review](#quick-copy-pr-architecture-review)
 - [Quick copy: PR architecture review (CI file list)](#quick-copy-pr-architecture-review-ci-file-list)
->>>>>>> ef8d7f3
+- [Quick copy: GitHub PR review](#quick-copy-github-pr-review)
 
 ### Quickstart options (choose one by goal)
 
@@ -279,10 +277,7 @@ Run these tools in order:
 4. `architecture_diagram` for dependency map
 5. `trace_feature` for an important user flow
 6. `impact_analysis` before modifying high-fanout files
-<<<<<<< HEAD
-=======
 7. `review_pr_impact` before final PR review
->>>>>>> ef8d7f3
 
 ---
 
@@ -470,8 +465,6 @@ Usage notes:
 - Low-token recommendation: `maxNodes: 8-12`, `style: "caveman"`.
 - Returns Mermaid text, narrative, and node count.
 
-<<<<<<< HEAD
-=======
 ### 10) `review_pr_impact`
 
 Analyzes PR-level architectural impact by diffing git refs and scoring dependency blast radius.
@@ -484,7 +477,8 @@ Input:
   "baseRef": "main",
   "headRef": "HEAD",
   "maxFiles": 200,
-  "transitiveDepth": 3
+  "transitiveDepth": 3,
+  "commentStyle": "full"
 }
 ```
 
@@ -493,7 +487,8 @@ Usage notes:
 - `repoPath` is required and must point to a git repository.
 - Uses `git diff --name-only baseRef...headRef` (fallback to `..`).
 - Maps changed files to indexed paths and computes direct/transitive impact.
-- Returns risk score/level, domains touched, review checklist, and a Mermaid impact diagram.
+- Returns risk score/level, domains touched, review checklist, Mermaid impact diagram, and `prCommentMarkdown` (ready to paste into PR comments).
+- `commentStyle` supports `full` (default, includes diagram/details) or `compact` (short CI-friendly summary).
 
 ### 11) `review_pr_impact_from_files`
 
@@ -509,7 +504,8 @@ Input:
     "backend/utils/sse.py"
   ],
   "maxFiles": 300,
-  "transitiveDepth": 3
+  "transitiveDepth": 3,
+  "commentStyle": "full"
 }
 ```
 
@@ -518,9 +514,35 @@ Usage notes:
 - `changedFiles` is required and should be repository-relative paths.
 - Best when your CI already has changed files from GitHub/GitLab APIs.
 - Avoids local git ref assumptions in sandbox/ephemeral CI runtimes.
-- Returns the same risk/checklist/diagram structure as `review_pr_impact`.
+- Returns the same risk/checklist/diagram structure as `review_pr_impact`, including `prCommentMarkdown`.
+- Accepts optional `unifiedDiff` and `commentStyle` for richer symbol weighting and output control.
 
->>>>>>> ef8d7f3
+### 12) `review_github_pr_impact`
+
+Analyzes a GitHub PR directly using `gh` CLI, with optional auto-comment posting.
+
+Input:
+
+```json
+{
+  "repoPath": "/absolute/path/to/repo",
+  "prNumber": 42,
+  "repo": "owner/name",
+  "maxFiles": 300,
+  "transitiveDepth": 3,
+  "commentStyle": "full",
+  "autoComment": false
+}
+```
+
+Usage notes:
+
+- Requires authenticated `gh` CLI in the runtime environment.
+- Fetches PR files + patch via `gh pr view` and `gh pr diff`.
+- Applies symbol-level weighting from diff hunks (V2 behavior).
+- When `autoComment: true`, posts `prCommentMarkdown` to PR (V3 behavior).
+- `commentStyle: compact` is useful when posting shorter bot comments.
+
 ---
 
 ## Recommended usage workflows
@@ -537,8 +559,6 @@ Usage notes:
 1. `ask_codebase` with concrete question
 2. `trace_feature` for the same area
 3. `impact_analysis` for planned edit targets
-<<<<<<< HEAD
-=======
 4. `review_pr_impact` before opening or merging PR
 
 ### Workflow E: CI/CD PR gate review
@@ -546,7 +566,12 @@ Usage notes:
 1. Generate changed file list in CI
 2. `review_pr_impact_from_files` with that list
 3. Fail/warn pipeline on `riskLevel: "high"` unless override is present
->>>>>>> ef8d7f3
+
+### Workflow F: GitHub-native PR review
+
+1. `review_github_pr_impact` with `prNumber`
+2. Inspect `riskLevel`, `symbolLevelChanges`, and `reviewChecklist`
+3. Optionally set `autoComment: true` to post markdown review directly
 
 ### Workflow C: Onboarding plan by seniority
 
@@ -801,21 +826,24 @@ Prompt:
 Run architecture_diagram with maxNodes 10 and explain the top fan-in files.
 ```
 
-<<<<<<< HEAD
-=======
 Prompt:
 
 ```text
-Run review_pr_impact with repoPath "/absolute/path/to/repo", baseRef "main", and headRef "HEAD". Summarize risk and checklist.
+Run review_pr_impact with repoPath "/absolute/path/to/repo", baseRef "main", headRef "HEAD", and commentStyle "compact". Summarize risk and checklist.
 ```
 
 Prompt:
 
 ```text
-Run review_pr_impact_from_files with changedFiles ["backend/routers/chat.py","backend/services/orchestrator.py","backend/utils/sse.py"] and transitiveDepth 3. Summarize risk and top checklist items.
+Run review_pr_impact_from_files with changedFiles ["backend/routers/chat.py","backend/services/orchestrator.py","backend/utils/sse.py"], transitiveDepth 3, and commentStyle "compact". Summarize risk and top checklist items.
 ```
 
->>>>>>> ef8d7f3
+Prompt:
+
+```text
+Run review_github_pr_impact with repoPath "/absolute/path/to/repo", prNumber 42, repo "owner/name", commentStyle "compact", and autoComment false. Return risk summary and prCommentMarkdown.
+```
+
 Expected output shape:
 
 ```json
@@ -827,8 +855,6 @@ Expected output shape:
 }
 ```
 
-<<<<<<< HEAD
-=======
 Expected PR-impact output shape:
 
 ```json
@@ -845,7 +871,8 @@ Expected PR-impact output shape:
   "riskScore": 72,
   "riskLevel": "high",
   "reviewChecklist": ["..."],
-  "diagram": { "type": "mermaid", "mermaid": "graph TD ..." }
+  "diagram": { "type": "mermaid", "mermaid": "graph TD ..." },
+  "prCommentMarkdown": "## PR Architecture Impact Review\n..."
 }
 ```
 
@@ -858,11 +885,28 @@ Expected explicit-files PR-impact output shape:
   "mappedChangedFiles": ["..."],
   "riskLevel": "moderate",
   "reviewChecklist": ["..."],
-  "diagram": { "type": "mermaid", "mermaid": "graph TD ..." }
+  "diagram": { "type": "mermaid", "mermaid": "graph TD ..." },
+  "prCommentMarkdown": "## PR Architecture Impact Review\n..."
 }
 ```
 
->>>>>>> ef8d7f3
+Expected GitHub PR-impact output shape:
+
+```json
+{
+  "github": { "prNumber": 42, "title": "...", "url": "...", "baseRef": "main", "headRef": "feature-x" },
+  "autoCommentRequested": false,
+  "commentPosted": false,
+  "riskLevel": "high",
+  "impact": {
+    "symbolLevelChanges": [
+      { "file": "backend/routers/chat.py", "symbols": ["stream_chat"], "hunkCount": 3, "addedLines": 28, "removedLines": 4 }
+    ]
+  },
+  "prCommentMarkdown": "## PR Architecture Impact Review\n..."
+}
+```
+
 ### Cookbook execution flow diagram
 
 ```mermaid
@@ -871,11 +915,7 @@ sequenceDiagram
   participant A as MCP Client
   participant C as Code Digger
   U->>A: Ask question / run prompt
-<<<<<<< HEAD
-  A->>C: call tool (ask_codebase / trace_feature / impact_analysis)
-=======
   A->>C: call tool (ask_codebase / trace_feature / impact_analysis / review_pr_impact)
->>>>>>> ef8d7f3
   C-->>A: JSON result (ranked files, graph context, recommendations)
   A-->>U: Explanation + next action list
 ```
@@ -947,23 +987,27 @@ Run architecture_diagram with maxNodes 8 and style "caveman".
 Summarize cross-domain coupling hotspots and likely simplification targets.
 ```
 
-<<<<<<< HEAD
-=======
 #### Quick copy: PR architecture review
 
 ```text
-Run review_pr_impact with repoPath "/absolute/path/to/repo", baseRef "main", headRef "HEAD", maxFiles 200, and transitiveDepth 3.
-Summarize riskLevel, hotspotsTouched, and the top reviewChecklist items.
+Run review_pr_impact with repoPath "/absolute/path/to/repo", baseRef "main", headRef "HEAD", maxFiles 200, transitiveDepth 3, and commentStyle "compact".
+Return prCommentMarkdown and use it as a ready-to-paste PR comment.
 ```
 
 #### Quick copy: PR architecture review (CI file list)
 
 ```text
-Run review_pr_impact_from_files with changedFiles ["backend/routers/chat.py","backend/services/orchestrator.py","backend/utils/sse.py"], maxFiles 300, and transitiveDepth 3.
-Summarize riskLevel, impacted domains, and top reviewChecklist items.
+Run review_pr_impact_from_files with changedFiles ["backend/routers/chat.py","backend/services/orchestrator.py","backend/utils/sse.py"], maxFiles 300, transitiveDepth 3, and commentStyle "compact".
+Return prCommentMarkdown and use it as a ready-to-paste PR comment.
 ```
 
->>>>>>> ef8d7f3
+#### Quick copy: GitHub PR review
+
+```text
+Run review_github_pr_impact with repoPath "/absolute/path/to/repo", prNumber 42, repo "owner/name", maxFiles 300, transitiveDepth 3, commentStyle "compact", and autoComment false.
+Return riskLevel, symbolLevelChanges, and prCommentMarkdown.
+```
+
 ---
 
 ## NPM scripts reference

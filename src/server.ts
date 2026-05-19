@@ -16,10 +16,7 @@ import {
   summarizeScope,
   traceFeature
 } from "./qa.js";
-<<<<<<< HEAD
-=======
-import { reviewPrImpact, reviewPrImpactFromFiles } from "./prImpact.js";
->>>>>>> ef8d7f3
+import { reviewGithubPrImpact, reviewPrImpact, reviewPrImpactFromFiles } from "./prImpact.js";
 
 const indexer = new RepoIndexer();
 
@@ -142,8 +139,6 @@ const TOOLS: Tool[] = [
         }
       }
     }
-<<<<<<< HEAD
-=======
   },
   {
     name: "review_pr_impact",
@@ -159,7 +154,8 @@ const TOOLS: Tool[] = [
         baseRef: { type: "string", default: "main" },
         headRef: { type: "string", default: "HEAD" },
         maxFiles: { type: "number", default: 200 },
-        transitiveDepth: { type: "number", default: 3 }
+        transitiveDepth: { type: "number", default: 3 },
+        commentStyle: { type: "string", enum: ["compact", "full"], default: "full" }
       },
       required: ["repoPath"]
     }
@@ -177,11 +173,43 @@ const TOOLS: Tool[] = [
           description: "Repository-relative changed file paths from PR/CI."
         },
         maxFiles: { type: "number", default: 300 },
-        transitiveDepth: { type: "number", default: 3 }
+        transitiveDepth: { type: "number", default: 3 },
+        unifiedDiff: {
+          type: "string",
+          description: "Optional unified diff content for symbol-level hunk weighting."
+        },
+        commentStyle: { type: "string", enum: ["compact", "full"], default: "full" }
       },
       required: ["changedFiles"]
     }
->>>>>>> ef8d7f3
+  },
+  {
+    name: "review_github_pr_impact",
+    description:
+      "Analyze a GitHub PR via gh CLI and optionally post markdown review comment.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        repoPath: {
+          type: "string",
+          description: "Absolute path to local git repository."
+        },
+        prNumber: { type: "number" },
+        repo: {
+          type: "string",
+          description: "Optional GitHub repo in owner/name format for gh -R."
+        },
+        maxFiles: { type: "number", default: 300 },
+        transitiveDepth: { type: "number", default: 3 },
+        commentStyle: { type: "string", enum: ["compact", "full"], default: "full" },
+        autoComment: {
+          type: "boolean",
+          default: false,
+          description: "When true, posts prCommentMarkdown to the PR using gh."
+        }
+      },
+      required: ["repoPath", "prNumber"]
+    }
   }
 ];
 
@@ -291,8 +319,6 @@ export async function startServer() {
             })
           );
         }
-<<<<<<< HEAD
-=======
         case "review_pr_impact": {
           const index = ensureIndex();
           const repoPath = String(args.repoPath ?? "");
@@ -305,7 +331,8 @@ export async function startServer() {
               baseRef: args.baseRef ? String(args.baseRef) : "main",
               headRef: args.headRef ? String(args.headRef) : "HEAD",
               maxFiles: Number(args.maxFiles ?? 200),
-              transitiveDepth: Number(args.transitiveDepth ?? 3)
+              transitiveDepth: Number(args.transitiveDepth ?? 3),
+              commentStyle: args.commentStyle === "compact" ? "compact" : "full"
             })
           );
         }
@@ -320,11 +347,34 @@ export async function startServer() {
             reviewPrImpactFromFiles(index, {
               changedFiles,
               maxFiles: Number(args.maxFiles ?? 300),
-              transitiveDepth: Number(args.transitiveDepth ?? 3)
+              transitiveDepth: Number(args.transitiveDepth ?? 3),
+              unifiedDiff: args.unifiedDiff ? String(args.unifiedDiff) : undefined,
+              commentStyle: args.commentStyle === "compact" ? "compact" : "full"
             })
           );
         }
->>>>>>> ef8d7f3
+        case "review_github_pr_impact": {
+          const index = ensureIndex();
+          const repoPath = String(args.repoPath ?? "");
+          if (!repoPath) {
+            throw new Error("repoPath is required.");
+          }
+          const prNumber = Number(args.prNumber ?? 0);
+          if (!Number.isFinite(prNumber) || prNumber < 1) {
+            throw new Error("prNumber must be a positive number.");
+          }
+          return asText(
+            await reviewGithubPrImpact(index, {
+              repoPath,
+              prNumber,
+              repo: args.repo ? String(args.repo) : undefined,
+              maxFiles: Number(args.maxFiles ?? 300),
+              transitiveDepth: Number(args.transitiveDepth ?? 3),
+              autoComment: Boolean(args.autoComment ?? false),
+              commentStyle: args.commentStyle === "compact" ? "compact" : "full"
+            })
+          );
+        }
         default:
           throw new Error(`Unknown tool: ${toolName}`);
       }

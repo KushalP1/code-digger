@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { buildDependencyGraph } from "../src/architecture.js";
-import { analyzePrImpact, reviewPrImpactFromFiles } from "../src/prImpact.js";
+import {
+  analyzePrImpact,
+  extractSymbolChangeHintsFromDiff,
+  reviewPrImpactFromFiles
+} from "../src/prImpact.js";
 import { FileInfo, RepoIndex } from "../src/types.js";
 
 function mkFile(path: string, imports: string[], capabilities: string[] = ["api"]): FileInfo {
@@ -75,6 +79,7 @@ describe("pr impact review", () => {
       impact: { transitiveDependencies: string[] };
       reviewChecklist: string[];
       diagram: { mermaid: string };
+      prCommentMarkdown: string;
     };
 
     assert.equal(typed.mappedChangedFiles.length, 1);
@@ -83,6 +88,8 @@ describe("pr impact review", () => {
     assert.ok(["low", "moderate", "high"].includes(typed.riskLevel));
     assert.ok(typed.reviewChecklist.length >= 2);
     assert.match(typed.diagram.mermaid, /^graph TD/m);
+    assert.match(typed.prCommentMarkdown, /## PR Architecture Impact Review/);
+    assert.match(typed.prCommentMarkdown, /```mermaid/);
   });
 
   it("reports unresolved changed files not in index", () => {
@@ -95,10 +102,12 @@ describe("pr impact review", () => {
       mappedChangedFiles: string[];
       unresolvedChangedFiles: string[];
       summary: string;
+      prCommentMarkdown: string;
     };
     assert.equal(typed.mappedChangedFiles.length, 1);
     assert.equal(typed.unresolvedChangedFiles.length, 1);
     assert.ok(typed.summary.length > 10);
+    assert.match(typed.prCommentMarkdown, /Unresolved files/);
   });
 
   it("supports explicit changed-file list mode for CI pipelines", () => {
@@ -123,6 +132,7 @@ describe("pr impact review", () => {
       analyzedFileCount: number;
       mappedChangedFiles: string[];
       riskScore: number;
+      prCommentMarkdown: string;
     };
 
     assert.equal(result.source, "explicit_changed_files");
@@ -130,5 +140,64 @@ describe("pr impact review", () => {
     assert.equal(result.analyzedFileCount, 2);
     assert.ok(result.mappedChangedFiles.length >= 1);
     assert.ok(result.riskScore > 0);
+    assert.match(result.prCommentMarkdown, /\*\*Source:\*\*\s+`explicit_changed_files`/);
+  });
+
+  it("parses diff hunks and applies symbol-level weighting", () => {
+    const files = new Map<string, FileInfo>([
+      [
+        "/repo/backend/routers/chat.py",
+        mkFile("/repo/backend/routers/chat.py", ["services.orchestrator"], ["api"])
+      ],
+      [
+        "/repo/backend/services/orchestrator.py",
+        mkFile("/repo/backend/services/orchestrator.py", [], ["reliability"])
+      ]
+    ]);
+    const index = makeIndex(files);
+    const diff = [
+      "diff --git a/backend/routers/chat.py b/backend/routers/chat.py",
+      "index 111..222 100644",
+      "--- a/backend/routers/chat.py",
+      "+++ b/backend/routers/chat.py",
+      "@@ -10,0 +11,8 @@ def stream_chat(request):",
+      "+def stream_chat(request):",
+      "+    return orchestrate(request)",
+      "@@ -30,0 +35,6 @@ class ChatController:",
+      "+class ChatController:",
+      "+    pass"
+    ].join("\n");
+
+    const symbolHints = extractSymbolChangeHintsFromDiff(diff);
+    const noHints = analyzePrImpact(index, ["backend/routers/chat.py"]) as { riskScore: number };
+    const withHints = analyzePrImpact(index, ["backend/routers/chat.py"], { symbolHints }) as {
+      riskScore: number;
+      impact: { symbolLevelChanges: Array<{ symbols: string[]; hunkCount: number }> };
+      prCommentMarkdown: string;
+    };
+
+    assert.ok(withHints.riskScore > noHints.riskScore);
+    assert.ok(withHints.impact.symbolLevelChanges.length >= 1);
+    assert.ok(withHints.impact.symbolLevelChanges[0].symbols.includes("stream_chat"));
+    assert.equal(withHints.impact.symbolLevelChanges[0].hunkCount, 2);
+    assert.match(withHints.prCommentMarkdown, /Symbol-Level Changes/);
+  });
+
+  it("supports compact markdown comment style", () => {
+    const files = new Map<string, FileInfo>([
+      ["/repo/backend/routers/chat.py", mkFile("/repo/backend/routers/chat.py", ["services.orchestrator"])],
+      ["/repo/backend/services/orchestrator.py", mkFile("/repo/backend/services/orchestrator.py", [])]
+    ]);
+    const index = makeIndex(files);
+    const result = reviewPrImpactFromFiles(index, {
+      changedFiles: ["backend/routers/chat.py"],
+      commentStyle: "compact"
+    }) as {
+      prCommentMarkdown: string;
+    };
+    assert.match(result.prCommentMarkdown, /## PR Architecture Impact Review/);
+    assert.match(result.prCommentMarkdown, /### Checklist/);
+    assert.ok(!result.prCommentMarkdown.includes("### Impact Diagram"));
+    assert.ok(!result.prCommentMarkdown.includes("```mermaid"));
   });
 });
