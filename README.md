@@ -28,6 +28,11 @@ Then restart your MCP client and run:
 - [Quick copy: Performance investigation](#quick-copy-performance-investigation)
 - [Quick copy: Python deep dive](#quick-copy-python-deep-dive)
 - [Quick copy: Low-token mode](#quick-copy-low-token-mode)
+<<<<<<< HEAD
+=======
+- [Quick copy: PR architecture review](#quick-copy-pr-architecture-review)
+- [Quick copy: PR architecture review (CI file list)](#quick-copy-pr-architecture-review-ci-file-list)
+>>>>>>> ef8d7f3
 
 ### Quickstart options (choose one by goal)
 
@@ -274,6 +279,10 @@ Run these tools in order:
 4. `architecture_diagram` for dependency map
 5. `trace_feature` for an important user flow
 6. `impact_analysis` before modifying high-fanout files
+<<<<<<< HEAD
+=======
+7. `review_pr_impact` before final PR review
+>>>>>>> ef8d7f3
 
 ---
 
@@ -461,6 +470,57 @@ Usage notes:
 - Low-token recommendation: `maxNodes: 8-12`, `style: "caveman"`.
 - Returns Mermaid text, narrative, and node count.
 
+<<<<<<< HEAD
+=======
+### 10) `review_pr_impact`
+
+Analyzes PR-level architectural impact by diffing git refs and scoring dependency blast radius.
+
+Input:
+
+```json
+{
+  "repoPath": "/absolute/path/to/repo",
+  "baseRef": "main",
+  "headRef": "HEAD",
+  "maxFiles": 200,
+  "transitiveDepth": 3
+}
+```
+
+Usage notes:
+
+- `repoPath` is required and must point to a git repository.
+- Uses `git diff --name-only baseRef...headRef` (fallback to `..`).
+- Maps changed files to indexed paths and computes direct/transitive impact.
+- Returns risk score/level, domains touched, review checklist, and a Mermaid impact diagram.
+
+### 11) `review_pr_impact_from_files`
+
+Analyzes PR-level architectural impact from an explicit changed-file list (ideal for CI pipelines).
+
+Input:
+
+```json
+{
+  "changedFiles": [
+    "backend/routers/chat.py",
+    "backend/services/orchestrator.py",
+    "backend/utils/sse.py"
+  ],
+  "maxFiles": 300,
+  "transitiveDepth": 3
+}
+```
+
+Usage notes:
+
+- `changedFiles` is required and should be repository-relative paths.
+- Best when your CI already has changed files from GitHub/GitLab APIs.
+- Avoids local git ref assumptions in sandbox/ephemeral CI runtimes.
+- Returns the same risk/checklist/diagram structure as `review_pr_impact`.
+
+>>>>>>> ef8d7f3
 ---
 
 ## Recommended usage workflows
@@ -477,6 +537,16 @@ Usage notes:
 1. `ask_codebase` with concrete question
 2. `trace_feature` for the same area
 3. `impact_analysis` for planned edit targets
+<<<<<<< HEAD
+=======
+4. `review_pr_impact` before opening or merging PR
+
+### Workflow E: CI/CD PR gate review
+
+1. Generate changed file list in CI
+2. `review_pr_impact_from_files` with that list
+3. Fail/warn pipeline on `riskLevel: "high"` unless override is present
+>>>>>>> ef8d7f3
 
 ### Workflow C: Onboarding plan by seniority
 
@@ -731,6 +801,21 @@ Prompt:
 Run architecture_diagram with maxNodes 10 and explain the top fan-in files.
 ```
 
+<<<<<<< HEAD
+=======
+Prompt:
+
+```text
+Run review_pr_impact with repoPath "/absolute/path/to/repo", baseRef "main", and headRef "HEAD". Summarize risk and checklist.
+```
+
+Prompt:
+
+```text
+Run review_pr_impact_from_files with changedFiles ["backend/routers/chat.py","backend/services/orchestrator.py","backend/utils/sse.py"] and transitiveDepth 3. Summarize risk and top checklist items.
+```
+
+>>>>>>> ef8d7f3
 Expected output shape:
 
 ```json
@@ -742,6 +827,42 @@ Expected output shape:
 }
 ```
 
+<<<<<<< HEAD
+=======
+Expected PR-impact output shape:
+
+```json
+{
+  "refs": { "baseRef": "main", "headRef": "HEAD" },
+  "changedFileCount": 9,
+  "mappedChangedFiles": ["..."],
+  "domainsTouched": ["api", "reliability"],
+  "impact": {
+    "directDependents": ["..."],
+    "transitiveDependents": ["..."],
+    "hotspotsTouched": ["..."]
+  },
+  "riskScore": 72,
+  "riskLevel": "high",
+  "reviewChecklist": ["..."],
+  "diagram": { "type": "mermaid", "mermaid": "graph TD ..." }
+}
+```
+
+Expected explicit-files PR-impact output shape:
+
+```json
+{
+  "source": "explicit_changed_files",
+  "changedFileCount": 3,
+  "mappedChangedFiles": ["..."],
+  "riskLevel": "moderate",
+  "reviewChecklist": ["..."],
+  "diagram": { "type": "mermaid", "mermaid": "graph TD ..." }
+}
+```
+
+>>>>>>> ef8d7f3
 ### Cookbook execution flow diagram
 
 ```mermaid
@@ -750,7 +871,11 @@ sequenceDiagram
   participant A as MCP Client
   participant C as Code Digger
   U->>A: Ask question / run prompt
+<<<<<<< HEAD
   A->>C: call tool (ask_codebase / trace_feature / impact_analysis)
+=======
+  A->>C: call tool (ask_codebase / trace_feature / impact_analysis / review_pr_impact)
+>>>>>>> ef8d7f3
   C-->>A: JSON result (ranked files, graph context, recommendations)
   A-->>U: Explanation + next action list
 ```
@@ -822,6 +947,23 @@ Run architecture_diagram with maxNodes 8 and style "caveman".
 Summarize cross-domain coupling hotspots and likely simplification targets.
 ```
 
+<<<<<<< HEAD
+=======
+#### Quick copy: PR architecture review
+
+```text
+Run review_pr_impact with repoPath "/absolute/path/to/repo", baseRef "main", headRef "HEAD", maxFiles 200, and transitiveDepth 3.
+Summarize riskLevel, hotspotsTouched, and the top reviewChecklist items.
+```
+
+#### Quick copy: PR architecture review (CI file list)
+
+```text
+Run review_pr_impact_from_files with changedFiles ["backend/routers/chat.py","backend/services/orchestrator.py","backend/utils/sse.py"], maxFiles 300, and transitiveDepth 3.
+Summarize riskLevel, impacted domains, and top reviewChecklist items.
+```
+
+>>>>>>> ef8d7f3
 ---
 
 ## NPM scripts reference
