@@ -1,0 +1,39 @@
+{
+  "name": "code-digger-mcp",
+  "version": "0.1.0",
+  "description": "MCP plugin for instant codebase understanding at scale",
+  "type": "module",
+  "main": "dist/main.js",
+  "bin": {
+    "code-digger-mcp": "dist/main.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/main.ts",
+    "start": "node dist/main.js",
+    "lint": "tsc --noEmit -p tsconfig.json",
+    "test": "tsx --test tests/**/*.test.ts",
+    "install:mcp": "node scripts/install-mcp.mjs",
+    "install:claude": "node scripts/install-mcp.mjs --platform claude",
+    "install:cursor": "node scripts/install-mcp.mjs --platform cursor",
+    "install:codex": "node scripts/install-mcp.mjs --platform codex",
+    "install:antigravity": "node scripts/install-mcp.mjs --platform antigravity"
+  },
+  "keywords": [
+    "mcp",
+    "codebase",
+    "architecture",
+    "semantic-search",
+    "developer-tools"
+  ],
+  "author": "Code Digger Contributors",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.17.5"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3"
+  }
+}
