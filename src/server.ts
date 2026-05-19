@@ -16,6 +16,7 @@ import {
   summarizeScope,
   traceFeature
 } from "./qa.js";
+import { reviewPrImpact, reviewPrImpactFromFiles } from "./prImpact.js";
 
 const indexer = new RepoIndexer();
 
@@ -138,6 +139,43 @@ const TOOLS: Tool[] = [
         }
       }
     }
+  },
+  {
+    name: "review_pr_impact",
+    description:
+      "Analyze PR-level architectural impact by diffing git refs and scoring graph blast radius.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        repoPath: {
+          type: "string",
+          description: "Absolute path to git repository root."
+        },
+        baseRef: { type: "string", default: "main" },
+        headRef: { type: "string", default: "HEAD" },
+        maxFiles: { type: "number", default: 200 },
+        transitiveDepth: { type: "number", default: 3 }
+      },
+      required: ["repoPath"]
+    }
+  },
+  {
+    name: "review_pr_impact_from_files",
+    description:
+      "Analyze PR-level architectural impact from an explicit changed-file list (CI-friendly).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        changedFiles: {
+          type: "array",
+          items: { type: "string" },
+          description: "Repository-relative changed file paths from PR/CI."
+        },
+        maxFiles: { type: "number", default: 300 },
+        transitiveDepth: { type: "number", default: 3 }
+      },
+      required: ["changedFiles"]
+    }
   }
 ];
 
@@ -244,6 +282,37 @@ export async function startServer() {
             architectureDiagram(index, {
               maxNodes: Number(args.maxNodes ?? 14),
               style
+            })
+          );
+        }
+        case "review_pr_impact": {
+          const index = ensureIndex();
+          const repoPath = String(args.repoPath ?? "");
+          if (!repoPath) {
+            throw new Error("repoPath is required.");
+          }
+          return asText(
+            await reviewPrImpact(index, {
+              repoPath,
+              baseRef: args.baseRef ? String(args.baseRef) : "main",
+              headRef: args.headRef ? String(args.headRef) : "HEAD",
+              maxFiles: Number(args.maxFiles ?? 200),
+              transitiveDepth: Number(args.transitiveDepth ?? 3)
+            })
+          );
+        }
+        case "review_pr_impact_from_files": {
+          const index = ensureIndex();
+          const changedFilesRaw = Array.isArray(args.changedFiles) ? args.changedFiles : [];
+          const changedFiles = changedFilesRaw.map((item) => String(item)).filter(Boolean);
+          if (changedFiles.length === 0) {
+            throw new Error("changedFiles must be a non-empty string array.");
+          }
+          return asText(
+            reviewPrImpactFromFiles(index, {
+              changedFiles,
+              maxFiles: Number(args.maxFiles ?? 300),
+              transitiveDepth: Number(args.transitiveDepth ?? 3)
             })
           );
         }
