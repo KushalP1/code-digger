@@ -1,6 +1,7 @@
 import path from "node:path";
 import { DEFAULT_INDEXING_CONFIG, IndexingConfig } from "./config.js";
 import { buildDependencyGraph } from "./architecture.js";
+import { createEmbeddingProvider, isEmbeddingProviderCompatible } from "./embeddingProvider.js";
 import { walkCodeFiles, safeReadUtf8 } from "./fs.js";
 import { saveGraphDb } from "./graphDb.js";
 import { parsePythonAstForFiles, pythonAstToSymbols } from "./pythonAst.js";
@@ -35,6 +36,10 @@ export class RepoIndexer {
     const normalizedRoot = path.resolve(rootPath);
     const codeFiles = await walkCodeFiles(normalizedRoot, this.config);
     const fileMap = new Map<string, FileInfo>();
+    const fileEmbeddings = new Map<string, number[]>();
+    const embeddingInputs: string[] = [];
+    const embeddingPaths: string[] = [];
+    const embeddingProvider = createEmbeddingProvider();
     const languageBreakdown: Record<string, number> = {};
     const topCapabilities: Record<string, number> = {};
     let totalBytes = 0;
@@ -76,6 +81,14 @@ export class RepoIndexer {
         capabilityTags: capabilities,
         pythonAst
       });
+      const embeddingInput = [
+        filePath,
+        summary,
+        symbols.slice(0, 30).map((symbol) => symbol.name).join(" "),
+        capabilities.join(" ")
+      ].join("\n");
+      embeddingInputs.push(embeddingInput);
+      embeddingPaths.push(filePath);
 
       languageBreakdown[language] = (languageBreakdown[language] ?? 0) + 1;
       for (const cap of capabilities) {
@@ -89,6 +102,14 @@ export class RepoIndexer {
     const tfidfNorms = new Map<string, number>();
     for (const [filePath, file] of fileMap.entries()) {
       tfidfNorms.set(filePath, vectorNorm(file.tokens, idf));
+    }
+    const embeddedVectors = await embeddingProvider.embedMany(embeddingInputs);
+    for (let i = 0; i < embeddingPaths.length; i += 1) {
+      const filePath = embeddingPaths[i];
+      const vec = embeddedVectors[i] ?? [];
+      if (isEmbeddingProviderCompatible(embeddingProvider.dimension, vec)) {
+        fileEmbeddings.set(filePath, vec);
+      }
     }
 
     const graph = buildDependencyGraph(fileMap);
@@ -104,11 +125,18 @@ export class RepoIndexer {
         totalLines,
         languageBreakdown,
         topCapabilities,
-        graphDb
+        graphDb,
+        embeddings: {
+          provider: embeddingProvider.name,
+          dimension: embeddingProvider.dimension,
+          embeddedFiles: fileEmbeddings.size
+        }
       },
       files: fileMap,
       tfidfNorms,
       inverseDocumentFrequency: idf,
+      fileEmbeddings,
+      embeddingDimension: embeddingProvider.dimension,
       dependencyGraph: graph.forward,
       reverseDependencyGraph: graph.reverse,
       pythonCallGraph

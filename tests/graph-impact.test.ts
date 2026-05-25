@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { buildDependencyGraph } from "../src/architecture.js";
+import { DEFAULT_EMBEDDING_DIMENSION, embedText } from "../src/embeddings.js";
 import { impactAnalysis, traceFeature } from "../src/qa.js";
 import { FileInfo, RepoIndex } from "../src/types.js";
 
@@ -20,6 +21,9 @@ function mkFile(path: string, imports: string[], tokenPairs: Array<[string, numb
 
 function makeIndex(files: Map<string, FileInfo>): RepoIndex {
   const graph = buildDependencyGraph(files);
+  const fileEmbeddings = new Map<string, number[]>(
+    [...files.values()].map((file) => [file.path, embedText(`${file.path}\n${file.summary}`)])
+  );
   return {
     stats: {
       rootPath: "/repo",
@@ -28,7 +32,12 @@ function makeIndex(files: Map<string, FileInfo>): RepoIndex {
       totalBytes: 400,
       totalLines: 40,
       languageBreakdown: { python: files.size },
-      topCapabilities: { api: files.size }
+      topCapabilities: { api: files.size },
+      embeddings: {
+        provider: "test-local-hash-ngram",
+        dimension: DEFAULT_EMBEDDING_DIMENSION,
+        embeddedFiles: fileEmbeddings.size
+      }
     },
     files,
     tfidfNorms: new Map([...files.values()].map((file) => [file.path, 1])),
@@ -38,6 +47,8 @@ function makeIndex(files: Map<string, FileInfo>): RepoIndex {
       ["sse", 1],
       ["execution", 1]
     ]),
+    fileEmbeddings,
+    embeddingDimension: DEFAULT_EMBEDDING_DIMENSION,
     dependencyGraph: graph.forward,
     reverseDependencyGraph: graph.reverse,
     pythonCallGraph: new Map()

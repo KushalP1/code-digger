@@ -143,7 +143,7 @@ Code Digger compresses that complexity into structured outputs: domain maps, dep
 
 ## Core capabilities
 
-- Semantic retrieval across the full repository
+- Hybrid lexical + embedding retrieval across the full repository
 - Architecture/domain compression from file-level metadata
 - Dependency + reverse dependency graph reasoning
 - Feature path reconstruction (`trace_feature`)
@@ -158,7 +158,7 @@ Code Digger compresses that complexity into structured outputs: domain maps, dep
 ## How it works
 
 1. `ingest_repo` recursively indexes your codebase.
-2. Indexing extracts symbols, imports, capability tags, and token vectors.
+2. Indexing extracts symbols, imports, capability tags, token vectors, and local embedding vectors.
 3. It builds dependency and reverse dependency graphs.
 4. It persists a compact graph database snapshot to `.code-digger/graph-db.json`.
 5. MCP tools answer architecture and implementation questions using that index or persisted graph DB.
@@ -322,6 +322,7 @@ Usage notes:
 
 - `question` is required.
 - `topK` is optional (default `8`).
+- Uses hybrid ranking (TF-IDF lexical + local embeddings).
 - Returns top files, file summaries, capability tags, and architecture context.
 
 Best for:
@@ -1114,8 +1115,31 @@ Current index defaults include:
 - Max file size: `768 KB`
 - Heavy folders skipped (`node_modules`, `dist`, `build`, `.git`, etc.)
 - Multi-language file support via extension
+- Local embedding provider: `local-hash-ngram` (default)
+- Embedding dimension: `192`
 
 Tune in `src/config.ts`.
+
+### Optional remote embedding provider
+
+Code Digger supports an OpenAI-compatible embedding endpoint with automatic local fallback.
+
+Set environment variables:
+
+```bash
+export CODE_DIGGER_EMBEDDING_PROVIDER=remote
+export CODE_DIGGER_EMBEDDING_API_URL="https://api.openai.com/v1/embeddings"
+export CODE_DIGGER_EMBEDDING_API_KEY="<your-api-key>"
+export CODE_DIGGER_EMBEDDING_MODEL="text-embedding-3-small"
+export CODE_DIGGER_EMBEDDING_DIMENSION=192
+export CODE_DIGGER_EMBEDDING_BATCH_SIZE=64
+```
+
+Behavior:
+
+- If remote config is complete, indexing uses remote embeddings.
+- If remote calls fail or config is incomplete, Code Digger falls back to local embeddings.
+- Index stats include active provider metadata under `stats.embeddings`.
 
 ## Python support details
 
@@ -1188,7 +1212,7 @@ For minimal output tokens:
 ## Roadmap
 
 - Graph database backing for very large monorepos (implemented: `graph_db_status`, `graph_db_neighbors`, persisted `.code-digger/graph-db.json`)
-- Embedding model integration for stronger semantic retrieval
+- Embedding model integration for stronger semantic retrieval (implemented: local + optional OpenAI-compatible remote provider in hybrid retrieval)
 - Runtime trace ingestion (OpenTelemetry/logs/APM)
 - Drift detection across git history
 - PR-level architecture impact review (implemented: `review_pr_impact`, `review_pr_impact_from_files`, `review_github_pr_impact`)

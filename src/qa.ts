@@ -1,4 +1,5 @@
 import { compressArchitecture } from "./architecture.js";
+import { cosineSimilarityDense, embedText } from "./embeddings.js";
 import { cosineSimilarity, termFrequency, tokenize } from "./semantic.js";
 import { AskResponse, RepoIndex } from "./types.js";
 
@@ -159,17 +160,26 @@ function orderedUniqueFeatureTokens(feature: string): string[] {
 
 export function askCodebase(index: RepoIndex, question: string, topK = 8): AskResponse {
   const queryTf = termFrequency(tokenize(question));
+  const queryEmbedding = embedText(question, index.embeddingDimension);
   const scores: Array<{ path: string; score: number }> = [];
 
   for (const [filePath, file] of index.files.entries()) {
-    const score = cosineSimilarity(
+    const lexicalScore = cosineSimilarity(
       queryTf,
       file.tokens,
       index.inverseDocumentFrequency,
       index.tfidfNorms.get(filePath) ?? 0
     );
-    if (score > 0) {
-      scores.push({ path: filePath, score });
+    const embeddingScore = cosineSimilarityDense(
+      queryEmbedding,
+      index.fileEmbeddings.get(filePath) ?? []
+    );
+    const blendedScore =
+      lexicalScore > 0
+        ? lexicalScore * 0.65 + Math.max(0, embeddingScore) * 0.35
+        : Math.max(0, embeddingScore) * 0.5;
+    if (blendedScore > 0.01) {
+      scores.push({ path: filePath, score: blendedScore });
     }
   }
 

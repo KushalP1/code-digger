@@ -56,6 +56,11 @@ export interface RepoStats {
     edgeCount: number;
     sizeBytes: number;
   };
+  embeddings?: {
+    provider: string;
+    dimension: number;
+    embeddedFiles: number;
+  };
 }
 
 export interface RepoIndex {
@@ -63,6 +68,8 @@ export interface RepoIndex {
   files: Map<string, FileInfo>;
   tfidfNorms: Map<string, number>;
   inverseDocumentFrequency: Map<string, number>;
+  fileEmbeddings: Map<string, number[]>;
+  embeddingDimension: number;
   dependencyGraph: Map<string, Set<string>>;
   reverseDependencyGraph: Map<string, Set<string>>;
   pythonCallGraph: Map<string, Set<string>>;
