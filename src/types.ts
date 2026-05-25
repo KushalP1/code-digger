@@ -50,6 +50,12 @@ export interface RepoStats {
   totalLines: number;
   languageBreakdown: Record<string, number>;
   topCapabilities: Record<string, number>;
+  graphDb?: {
+    filePath: string;
+    nodeCount: number;
+    edgeCount: number;
+    sizeBytes: number;
+  };
 }
 
 export interface RepoIndex {

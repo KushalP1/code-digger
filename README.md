@@ -31,6 +31,7 @@ Then restart your MCP client and run:
 - [Quick copy: PR architecture review](#quick-copy-pr-architecture-review)
 - [Quick copy: PR architecture review (CI file list)](#quick-copy-pr-architecture-review-ci-file-list)
 - [Quick copy: GitHub PR review](#quick-copy-github-pr-review)
+- [Quick copy: Graph DB queries](#quick-copy-graph-db-queries)
 
 ### Quickstart options (choose one by goal)
 
@@ -151,6 +152,7 @@ Code Digger compresses that complexity into structured outputs: domain maps, dep
 - Python AST insights (decorators, inheritance, async, call graph)
 - Auto-understanding mode for zero-question orientation
 - Mermaid architecture diagram generation
+- Persisted graph database backing for large repos (`graph_db_status`, `graph_db_neighbors`)
 - Token-control options (`tokenBudget`, `maxNodes`, `style: caveman`)
 
 ## How it works
@@ -158,7 +160,8 @@ Code Digger compresses that complexity into structured outputs: domain maps, dep
 1. `ingest_repo` recursively indexes your codebase.
 2. Indexing extracts symbols, imports, capability tags, and token vectors.
 3. It builds dependency and reverse dependency graphs.
-4. MCP tools answer architecture and implementation questions using that index.
+4. It persists a compact graph database snapshot to `.code-digger/graph-db.json`.
+5. MCP tools answer architecture and implementation questions using that index or persisted graph DB.
 
 ---
 
@@ -278,6 +281,7 @@ Run these tools in order:
 5. `trace_feature` for an important user flow
 6. `impact_analysis` before modifying high-fanout files
 7. `review_pr_impact` before final PR review
+8. `graph_db_status` to verify persisted graph backing exists
 
 ---
 
@@ -543,6 +547,45 @@ Usage notes:
 - When `autoComment: true`, posts `prCommentMarkdown` to PR (V3 behavior).
 - `commentStyle: compact` is useful when posting shorter bot comments.
 
+### 13) `graph_db_status`
+
+Shows persisted graph database status for a repository.
+
+Input:
+
+```json
+{
+  "rootPath": "/absolute/path/to/repo"
+}
+```
+
+Usage notes:
+
+- Returns whether graph DB exists plus metadata (`nodeCount`, `edgeCount`, `sizeBytes`, timestamp).
+- Created/updated automatically during `ingest_repo`.
+
+### 14) `graph_db_neighbors`
+
+Queries neighbors from the persisted graph database without requiring a fresh ingest in the same session.
+
+Input:
+
+```json
+{
+  "rootPath": "/absolute/path/to/repo",
+  "filePath": "backend/services/orchestrator.py",
+  "direction": "both",
+  "depth": 2,
+  "maxNodes": 200
+}
+```
+
+Usage notes:
+
+- `filePath` can be absolute or repo-relative suffix.
+- `direction` supports `forward`, `reverse`, or `both`.
+- Useful for very large monorepos where you want cheap graph traversals after initial ingest.
+
 ---
 
 ## Recommended usage workflows
@@ -572,6 +615,12 @@ Usage notes:
 1. `review_github_pr_impact` with `prNumber`
 2. Inspect `riskLevel`, `symbolLevelChanges`, and `reviewChecklist`
 3. Optionally set `autoComment: true` to post markdown review directly
+
+### Workflow G: Very-large monorepo graph queries
+
+1. Run `ingest_repo` once to create `.code-digger/graph-db.json`
+2. Run `graph_db_status` to confirm persisted graph metadata
+3. Use `graph_db_neighbors` for dependency traversals without re-ingesting
 
 ### Workflow C: Onboarding plan by seniority
 
@@ -844,6 +893,12 @@ Prompt:
 Run review_github_pr_impact with repoPath "/absolute/path/to/repo", prNumber 42, repo "owner/name", commentStyle "compact", and autoComment false. Return risk summary and prCommentMarkdown.
 ```
 
+Prompt:
+
+```text
+Run graph_db_neighbors with rootPath "/absolute/path/to/repo", filePath "backend/services/orchestrator.py", direction "both", depth 2, maxNodes 200. Summarize upstream/downstream hotspots.
+```
+
 Expected output shape:
 
 ```json
@@ -907,6 +962,24 @@ Expected GitHub PR-impact output shape:
 }
 ```
 
+Expected Graph DB-neighbors output shape:
+
+```json
+{
+  "found": true,
+  "filePath": ".../backend/services/orchestrator.py",
+  "direction": "both",
+  "direct": {
+    "forward": ["..."],
+    "reverse": ["..."]
+  },
+  "traversal": {
+    "forward": ["..."],
+    "reverse": ["..."]
+  }
+}
+```
+
 ### Cookbook execution flow diagram
 
 ```mermaid
@@ -915,7 +988,7 @@ sequenceDiagram
   participant A as MCP Client
   participant C as Code Digger
   U->>A: Ask question / run prompt
-  A->>C: call tool (ask_codebase / trace_feature / impact_analysis / review_pr_impact)
+  A->>C: call tool (ask_codebase / trace_feature / impact_analysis / review_pr_impact / review_pr_impact_from_files / review_github_pr_impact)
   C-->>A: JSON result (ranked files, graph context, recommendations)
   A-->>U: Explanation + next action list
 ```
@@ -1006,6 +1079,14 @@ Return prCommentMarkdown and use it as a ready-to-paste PR comment.
 ```text
 Run review_github_pr_impact with repoPath "/absolute/path/to/repo", prNumber 42, repo "owner/name", maxFiles 300, transitiveDepth 3, commentStyle "compact", and autoComment false.
 Return riskLevel, symbolLevelChanges, and prCommentMarkdown.
+```
+
+#### Quick copy: Graph DB queries
+
+```text
+Run graph_db_status with rootPath "/absolute/path/to/repo".
+Run graph_db_neighbors with rootPath "/absolute/path/to/repo", filePath "backend/services/orchestrator.py", direction "both", depth 2, and maxNodes 200.
+Return direct and traversal neighbors and flag high-fanout files.
 ```
 
 ---
@@ -1106,11 +1187,11 @@ For minimal output tokens:
 
 ## Roadmap
 
-- Graph database backing for very large monorepos
+- Graph database backing for very large monorepos (implemented: `graph_db_status`, `graph_db_neighbors`, persisted `.code-digger/graph-db.json`)
 - Embedding model integration for stronger semantic retrieval
 - Runtime trace ingestion (OpenTelemetry/logs/APM)
 - Drift detection across git history
-- PR-level architecture impact review
+- PR-level architecture impact review (implemented: `review_pr_impact`, `review_pr_impact_from_files`, `review_github_pr_impact`)
 
 ## License
 

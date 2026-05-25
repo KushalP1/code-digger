@@ -2,6 +2,7 @@ import path from "node:path";
 import { DEFAULT_INDEXING_CONFIG, IndexingConfig } from "./config.js";
 import { buildDependencyGraph } from "./architecture.js";
 import { walkCodeFiles, safeReadUtf8 } from "./fs.js";
+import { saveGraphDb } from "./graphDb.js";
 import { parsePythonAstForFiles, pythonAstToSymbols } from "./pythonAst.js";
 import { termFrequency, tokenize, vectorNorm } from "./semantic.js";
 import {
@@ -91,6 +92,7 @@ export class RepoIndexer {
     }
 
     const graph = buildDependencyGraph(fileMap);
+    const graphDb = await saveGraphDb(normalizedRoot, graph.forward, graph.reverse);
     const pythonCallGraph = this.buildPythonCallGraph(fileMap);
 
     this.index = {
@@ -101,7 +103,8 @@ export class RepoIndexer {
         totalBytes,
         totalLines,
         languageBreakdown,
-        topCapabilities
+        topCapabilities,
+        graphDb
       },
       files: fileMap,
       tfidfNorms,

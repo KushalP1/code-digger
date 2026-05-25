@@ -16,6 +16,7 @@ import {
   summarizeScope,
   traceFeature
 } from "./qa.js";
+import { graphDbStatus, loadGraphDb, queryGraphDbNeighbors } from "./graphDb.js";
 import { reviewGithubPrImpact, reviewPrImpact, reviewPrImpactFromFiles } from "./prImpact.js";
 
 const indexer = new RepoIndexer();
@@ -138,6 +139,45 @@ const TOOLS: Tool[] = [
           default: "compact"
         }
       }
+    }
+  },
+  {
+    name: "graph_db_status",
+    description: "Show persisted graph database status for a repository.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        rootPath: {
+          type: "string",
+          description: "Absolute path to repository root."
+        }
+      },
+      required: ["rootPath"]
+    }
+  },
+  {
+    name: "graph_db_neighbors",
+    description: "Query neighbors from persisted graph database without re-indexing.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        rootPath: {
+          type: "string",
+          description: "Absolute path to repository root."
+        },
+        filePath: {
+          type: "string",
+          description: "File path (absolute or repo-relative suffix) to query."
+        },
+        direction: {
+          type: "string",
+          enum: ["forward", "reverse", "both"],
+          default: "both"
+        },
+        depth: { type: "number", default: 2 },
+        maxNodes: { type: "number", default: 200 }
+      },
+      required: ["rootPath", "filePath"]
     }
   },
   {
@@ -316,6 +356,35 @@ export async function startServer() {
             architectureDiagram(index, {
               maxNodes: Number(args.maxNodes ?? 14),
               style
+            })
+          );
+        }
+        case "graph_db_status": {
+          const rootPath = String(args.rootPath ?? "");
+          if (!rootPath) {
+            throw new Error("rootPath is required.");
+          }
+          return asText(await graphDbStatus(rootPath));
+        }
+        case "graph_db_neighbors": {
+          const rootPath = String(args.rootPath ?? "");
+          const filePath = String(args.filePath ?? "");
+          if (!rootPath || !filePath) {
+            throw new Error("rootPath and filePath are required.");
+          }
+          const directionRaw = String(args.direction ?? "both");
+          const direction = directionRaw === "forward" || directionRaw === "reverse" ? directionRaw : "both";
+          const depth = Math.max(1, Math.min(6, Number(args.depth ?? 2)));
+          const maxNodes = Math.max(20, Math.min(1200, Number(args.maxNodes ?? 200)));
+          const db = await loadGraphDb(rootPath);
+          if (!db) {
+            throw new Error("Persisted graph database not found. Run ingest_repo first.");
+          }
+          return asText(
+            queryGraphDbNeighbors(db, filePath, {
+              direction,
+              depth,
+              maxNodes
             })
           );
         }
