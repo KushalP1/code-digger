@@ -91,8 +91,30 @@ function resolveNodeIndex(db: PersistedGraphDb, filePath: string): number | unde
     return exact;
   }
   const suffix = normalized.startsWith("/") ? normalized : `/${normalized}`;
-  const suffixIdx = db.nodes.findIndex((node) => node.replace(/\\/g, "/").endsWith(suffix));
-  return suffixIdx >= 0 ? suffixIdx : undefined;
+  const matches = db.nodes
+    .map((node, idx) => ({ node: node.replace(/\\/g, "/"), idx }))
+    .filter(({ node }) => node.endsWith(suffix))
+    .map(({ idx }) => idx);
+  if (matches.length === 1) {
+    return matches[0];
+  }
+  return undefined;
+}
+
+function resolveNodeCandidates(db: PersistedGraphDb, filePath: string): number[] {
+  const normalized = filePath.replace(/\\/g, "/");
+  const exact = db.nodes
+    .map((node, idx) => ({ node: node.replace(/\\/g, "/"), idx }))
+    .filter(({ node }) => node === normalized)
+    .map(({ idx }) => idx);
+  if (exact.length > 0) {
+    return exact.slice(0, 1);
+  }
+  const suffix = normalized.startsWith("/") ? normalized : `/${normalized}`;
+  return db.nodes
+    .map((node, idx) => ({ node: node.replace(/\\/g, "/"), idx }))
+    .filter(({ node }) => node.endsWith(suffix))
+    .map(({ idx }) => idx);
 }
 
 function bfsFromAdjacency(
@@ -131,10 +153,21 @@ export function queryGraphDbNeighbors(
   filePath: string,
   opts: { direction: "forward" | "reverse" | "both"; depth: number; maxNodes: number }
 ): object {
+  const candidates = resolveNodeCandidates(db, filePath);
   const index = resolveNodeIndex(db, filePath);
+  if (candidates.length > 1 && index === undefined) {
+    return {
+      found: false,
+      ambiguous: true,
+      filePath,
+      candidates: candidates.slice(0, 20).map((idx) => db.nodes[idx]),
+      message: "Multiple graph nodes match this suffix. Use a more specific file path."
+    };
+  }
   if (index === undefined) {
     return {
       found: false,
+      ambiguous: false,
       filePath,
       message: "File not found in persisted graph database."
     };

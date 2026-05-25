@@ -3,6 +3,7 @@ import {
   cosineSimilarityDense,
   embedText
 } from "./embeddings.js";
+import { RepoIndex } from "./types.js";
 
 type EmbeddingProviderName = "local-hash-ngram" | "openai-compatible";
 
@@ -70,6 +71,7 @@ class OpenAiCompatibleEmbeddingProvider implements EmbeddingProvider {
       return [];
     }
     const vectors: number[][] = [];
+    let remoteFailure = false;
     for (let i = 0; i < texts.length; i += this.batchSize) {
       const batch = texts.slice(i, i + this.batchSize);
       try {
@@ -98,9 +100,13 @@ class OpenAiCompatibleEmbeddingProvider implements EmbeddingProvider {
         }
         vectors.push(...batchVectors);
       } catch {
-        // If remote embeddings fail, keep indexing robust with local fallback.
-        vectors.push(...(await this.fallback.embedMany(batch)));
+        remoteFailure = true;
+        break;
       }
+    }
+    if (remoteFailure || vectors.length !== texts.length) {
+      // Keep one consistent vector space: when remote fails, fall back for all texts.
+      return this.fallback.embedMany(texts);
     }
     return vectors;
   }
@@ -151,4 +157,23 @@ export function createEmbeddingProvider(
 
 export function isEmbeddingProviderCompatible(indexDimension: number, candidate: number[]): boolean {
   return candidate.length > 0 && candidate.length === indexDimension && cosineSimilarityDense(candidate, candidate) > 0;
+}
+
+export async function buildQueryEmbeddingForIndex(
+  index: RepoIndex,
+  question: string,
+  env: NodeJS.ProcessEnv = process.env,
+  fetchImpl: typeof fetch = fetch
+): Promise<number[] | null> {
+  const expectedProvider = index.stats.embeddings?.provider ?? "local-hash-ngram";
+  const provider = createEmbeddingProvider(env, fetchImpl);
+  if (provider.name !== expectedProvider || provider.dimension !== index.embeddingDimension) {
+    return null;
+  }
+  const vectors = await provider.embedMany([question]);
+  const candidate = vectors[0] ?? [];
+  if (!isEmbeddingProviderCompatible(index.embeddingDimension, candidate)) {
+    return null;
+  }
+  return candidate;
 }

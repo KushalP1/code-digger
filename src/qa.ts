@@ -158,9 +158,21 @@ function orderedUniqueFeatureTokens(feature: string): string[] {
   return ordered;
 }
 
-export function askCodebase(index: RepoIndex, question: string, topK = 8): AskResponse {
+export function askCodebase(
+  index: RepoIndex,
+  question: string,
+  topK = 8,
+  opts: { queryEmbedding?: number[] | null } = {}
+): AskResponse {
   const queryTf = termFrequency(tokenize(question));
-  const queryEmbedding = embedText(question, index.embeddingDimension);
+  const providerName = index.stats.embeddings?.provider ?? "local-hash-ngram";
+  const localProviderActive = providerName !== "openai-compatible";
+  const queryEmbedding =
+    opts.queryEmbedding !== undefined
+      ? opts.queryEmbedding
+      : localProviderActive
+        ? embedText(question, index.embeddingDimension)
+        : null;
   const scores: Array<{ path: string; score: number }> = [];
 
   for (const [filePath, file] of index.files.entries()) {
@@ -170,10 +182,10 @@ export function askCodebase(index: RepoIndex, question: string, topK = 8): AskRe
       index.inverseDocumentFrequency,
       index.tfidfNorms.get(filePath) ?? 0
     );
-    const embeddingScore = cosineSimilarityDense(
-      queryEmbedding,
-      index.fileEmbeddings.get(filePath) ?? []
-    );
+    const embeddingScore =
+      queryEmbedding && queryEmbedding.length === index.embeddingDimension
+        ? cosineSimilarityDense(queryEmbedding, index.fileEmbeddings.get(filePath) ?? [])
+        : 0;
     const blendedScore =
       lexicalScore > 0
         ? lexicalScore * 0.65 + Math.max(0, embeddingScore) * 0.35
@@ -273,8 +285,12 @@ export function summarizeScope(index: RepoIndex, scopePath?: string): object {
   };
 }
 
-export function traceFeature(index: RepoIndex, feature: string): object {
-  const result = askCodebase(index, feature, 20);
+export function traceFeature(
+  index: RepoIndex,
+  feature: string,
+  opts: { queryEmbedding?: number[] | null } = {}
+): object {
+  const result = askCodebase(index, feature, 20, { queryEmbedding: opts.queryEmbedding });
   const seedPaths = result.topFiles.slice(0, 12).map((file) => file.path);
   const weighted = new Map<string, number>();
   const featureTokens = tokenize(feature);

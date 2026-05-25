@@ -6,6 +6,7 @@ import {
   Tool
 } from "@modelcontextprotocol/sdk/types.js";
 import { RepoIndexer } from "./indexer.js";
+import { buildQueryEmbeddingForIndex } from "./embeddingProvider.js";
 import {
   architectureDiagram,
   askCodebase,
@@ -212,6 +213,10 @@ const TOOLS: Tool[] = [
           items: { type: "string" },
           description: "Repository-relative changed file paths from PR/CI."
         },
+        rootPath: {
+          type: "string",
+          description: "Optional repo root used for graph-db fallback when no in-memory index is loaded."
+        },
         maxFiles: { type: "number", default: 300 },
         transitiveDepth: { type: "number", default: 3 },
         unifiedDiff: {
@@ -246,6 +251,11 @@ const TOOLS: Tool[] = [
           type: "boolean",
           default: false,
           description: "When true, posts prCommentMarkdown to the PR using gh."
+        },
+        forceNewComment: {
+          type: "boolean",
+          default: false,
+          description: "When true with autoComment, always creates a new PR comment instead of updating existing."
         }
       },
       required: ["repoPath", "prNumber"]
@@ -305,8 +315,12 @@ export async function startServer() {
         }
         case "ask_codebase": {
           const index = ensureIndex();
+          const question = String(args.question ?? "");
+          const queryEmbedding = await buildQueryEmbeddingForIndex(index, question);
           return asText(
-            askCodebase(index, String(args.question ?? ""), Number(args.topK ?? 8))
+            askCodebase(index, question, Number(args.topK ?? 8), {
+              queryEmbedding
+            })
           );
         }
         case "summarize_scope": {
@@ -315,7 +329,9 @@ export async function startServer() {
         }
         case "trace_feature": {
           const index = ensureIndex();
-          return asText(traceFeature(index, String(args.feature ?? "")));
+          const feature = String(args.feature ?? "");
+          const queryEmbedding = await buildQueryEmbeddingForIndex(index, feature);
+          return asText(traceFeature(index, feature, { queryEmbedding }));
         }
         case "impact_analysis": {
           const index = ensureIndex();
@@ -389,7 +405,7 @@ export async function startServer() {
           );
         }
         case "review_pr_impact": {
-          const index = ensureIndex();
+          const index = indexer.getIndex();
           const repoPath = String(args.repoPath ?? "");
           if (!repoPath) {
             throw new Error("repoPath is required.");
@@ -406,24 +422,25 @@ export async function startServer() {
           );
         }
         case "review_pr_impact_from_files": {
-          const index = ensureIndex();
+          const index = indexer.getIndex();
           const changedFilesRaw = Array.isArray(args.changedFiles) ? args.changedFiles : [];
           const changedFiles = changedFilesRaw.map((item) => String(item)).filter(Boolean);
           if (changedFiles.length === 0) {
             throw new Error("changedFiles must be a non-empty string array.");
           }
           return asText(
-            reviewPrImpactFromFiles(index, {
+            await reviewPrImpactFromFiles(index, {
               changedFiles,
               maxFiles: Number(args.maxFiles ?? 300),
               transitiveDepth: Number(args.transitiveDepth ?? 3),
               unifiedDiff: args.unifiedDiff ? String(args.unifiedDiff) : undefined,
-              commentStyle: args.commentStyle === "compact" ? "compact" : "full"
+              commentStyle: args.commentStyle === "compact" ? "compact" : "full",
+              rootPath: args.rootPath ? String(args.rootPath) : undefined
             })
           );
         }
         case "review_github_pr_impact": {
-          const index = ensureIndex();
+          const index = indexer.getIndex();
           const repoPath = String(args.repoPath ?? "");
           if (!repoPath) {
             throw new Error("repoPath is required.");
@@ -440,6 +457,7 @@ export async function startServer() {
               maxFiles: Number(args.maxFiles ?? 300),
               transitiveDepth: Number(args.transitiveDepth ?? 3),
               autoComment: Boolean(args.autoComment ?? false),
+              forceNewComment: Boolean(args.forceNewComment ?? false),
               commentStyle: args.commentStyle === "compact" ? "compact" : "full"
             })
           );

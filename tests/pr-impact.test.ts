@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
+import { mkdtemp } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, it } from "node:test";
 import { buildDependencyGraph } from "../src/architecture.js";
 import { DEFAULT_EMBEDDING_DIMENSION, embedText } from "../src/embeddings.js";
+import { saveGraphDb } from "../src/graphDb.js";
 import {
   analyzePrImpact,
   extractSymbolChangeHintsFromDiff,
@@ -99,6 +103,7 @@ describe("pr impact review", () => {
     assert.ok(["low", "moderate", "high"].includes(typed.riskLevel));
     assert.ok(typed.reviewChecklist.length >= 2);
     assert.match(typed.diagram.mermaid, /^graph TD/m);
+    assert.match(typed.prCommentMarkdown, /code-digger-pr-impact-review/);
     assert.match(typed.prCommentMarkdown, /## PR Architecture Impact Review/);
     assert.match(typed.prCommentMarkdown, /```mermaid/);
   });
@@ -121,7 +126,7 @@ describe("pr impact review", () => {
     assert.match(typed.prCommentMarkdown, /Unresolved files/);
   });
 
-  it("supports explicit changed-file list mode for CI pipelines", () => {
+  it("supports explicit changed-file list mode for CI pipelines", async () => {
     const files = new Map<string, FileInfo>([
       [
         "/repo/backend/routers/chat.py",
@@ -134,10 +139,10 @@ describe("pr impact review", () => {
       ["/repo/backend/services/ai_service.py", mkFile("/repo/backend/services/ai_service.py", [])]
     ]);
     const index = makeIndex(files);
-    const result = reviewPrImpactFromFiles(index, {
+    const result = (await reviewPrImpactFromFiles(index, {
       changedFiles: ["backend/routers/chat.py", "backend/services/orchestrator.py"],
       transitiveDepth: 3
-    }) as {
+    })) as {
       source: string;
       changedFileCount: number;
       analyzedFileCount: number;
@@ -194,21 +199,50 @@ describe("pr impact review", () => {
     assert.match(withHints.prCommentMarkdown, /Symbol-Level Changes/);
   });
 
-  it("supports compact markdown comment style", () => {
+  it("supports compact markdown comment style", async () => {
     const files = new Map<string, FileInfo>([
       ["/repo/backend/routers/chat.py", mkFile("/repo/backend/routers/chat.py", ["services.orchestrator"])],
       ["/repo/backend/services/orchestrator.py", mkFile("/repo/backend/services/orchestrator.py", [])]
     ]);
     const index = makeIndex(files);
-    const result = reviewPrImpactFromFiles(index, {
+    const result = (await reviewPrImpactFromFiles(index, {
       changedFiles: ["backend/routers/chat.py"],
       commentStyle: "compact"
-    }) as {
+    })) as {
       prCommentMarkdown: string;
     };
     assert.match(result.prCommentMarkdown, /## PR Architecture Impact Review/);
     assert.match(result.prCommentMarkdown, /### Checklist/);
     assert.ok(!result.prCommentMarkdown.includes("### Impact Diagram"));
     assert.ok(!result.prCommentMarkdown.includes("```mermaid"));
+  });
+
+  it("falls back to persisted graph db when index is unavailable", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "code-digger-pr-fallback-"));
+    const f1 = path.join(repoRoot, "backend/routers/chat.py");
+    const f2 = path.join(repoRoot, "backend/services/orchestrator.py");
+    const f3 = path.join(repoRoot, "backend/utils/sse.py");
+    const forward = new Map<string, Set<string>>([
+      [f1, new Set([f2])],
+      [f2, new Set([f3])],
+      [f3, new Set<string>()]
+    ]);
+    const reverse = new Map<string, Set<string>>([
+      [f1, new Set<string>()],
+      [f2, new Set([f1])],
+      [f3, new Set([f2])]
+    ]);
+    await saveGraphDb(repoRoot, forward, reverse);
+    const result = (await reviewPrImpactFromFiles(null, {
+      changedFiles: ["backend/routers/chat.py"],
+      rootPath: repoRoot
+    })) as {
+      mode: string;
+      mappedChangedFiles: string[];
+      riskScore: number;
+    };
+    assert.equal(result.mode, "graph-db-fallback");
+    assert.equal(result.mappedChangedFiles.length, 1);
+    assert.ok(result.riskScore > 0);
   });
 });

@@ -508,6 +508,7 @@ Input:
     "backend/services/orchestrator.py",
     "backend/utils/sse.py"
   ],
+  "rootPath": "/absolute/path/to/repo",
   "maxFiles": 300,
   "transitiveDepth": 3,
   "commentStyle": "full"
@@ -521,6 +522,7 @@ Usage notes:
 - Avoids local git ref assumptions in sandbox/ephemeral CI runtimes.
 - Returns the same risk/checklist/diagram structure as `review_pr_impact`, including `prCommentMarkdown`.
 - Accepts optional `unifiedDiff` and `commentStyle` for richer symbol weighting and output control.
+- If no in-memory index exists, provide `rootPath` so it can fall back to persisted graph DB.
 
 ### 12) `review_github_pr_impact`
 
@@ -536,7 +538,8 @@ Input:
   "maxFiles": 300,
   "transitiveDepth": 3,
   "commentStyle": "full",
-  "autoComment": false
+  "autoComment": false,
+  "forceNewComment": false
 }
 ```
 
@@ -545,7 +548,8 @@ Usage notes:
 - Requires authenticated `gh` CLI in the runtime environment.
 - Fetches PR files + patch via `gh pr view` and `gh pr diff`.
 - Applies symbol-level weighting from diff hunks (V2 behavior).
-- When `autoComment: true`, posts `prCommentMarkdown` to PR (V3 behavior).
+- When `autoComment: true`, upserts a single marker-based Code Digger comment (updates existing comment if found, otherwise creates one).
+- Set `forceNewComment: true` to always create a new comment instead of updating.
 - `commentStyle: compact` is useful when posting shorter bot comments.
 
 ### 13) `graph_db_status`
@@ -584,6 +588,7 @@ Input:
 Usage notes:
 
 - `filePath` can be absolute or repo-relative suffix.
+- If suffix matches multiple files, tool returns `ambiguous: true` with candidate paths.
 - `direction` supports `forward`, `reverse`, or `both`.
 - Useful for very large monorepos where you want cheap graph traversals after initial ingest.
 
@@ -615,7 +620,8 @@ Usage notes:
 
 1. `review_github_pr_impact` with `prNumber`
 2. Inspect `riskLevel`, `symbolLevelChanges`, and `reviewChecklist`
-3. Optionally set `autoComment: true` to post markdown review directly
+3. Optionally set `autoComment: true` to post markdown review directly (default is idempotent upsert)
+4. Set `forceNewComment: true` only if you want a fresh historical comment on every run
 
 ### Workflow G: Very-large monorepo graph queries
 
@@ -937,6 +943,7 @@ Expected explicit-files PR-impact output shape:
 ```json
 {
   "source": "explicit_changed_files",
+  "mode": "graph-db-fallback",
   "changedFileCount": 3,
   "mappedChangedFiles": ["..."],
   "riskLevel": "moderate",
@@ -952,7 +959,9 @@ Expected GitHub PR-impact output shape:
 {
   "github": { "prNumber": 42, "title": "...", "url": "...", "baseRef": "main", "headRef": "feature-x" },
   "autoCommentRequested": false,
+  "forceNewComment": false,
   "commentPosted": false,
+  "commentAction": "none",
   "riskLevel": "high",
   "impact": {
     "symbolLevelChanges": [
@@ -1071,16 +1080,18 @@ Return prCommentMarkdown and use it as a ready-to-paste PR comment.
 #### Quick copy: PR architecture review (CI file list)
 
 ```text
-Run review_pr_impact_from_files with changedFiles ["backend/routers/chat.py","backend/services/orchestrator.py","backend/utils/sse.py"], maxFiles 300, transitiveDepth 3, and commentStyle "compact".
+Run review_pr_impact_from_files with changedFiles ["backend/routers/chat.py","backend/services/orchestrator.py","backend/utils/sse.py"], rootPath "/absolute/path/to/repo", maxFiles 300, transitiveDepth 3, and commentStyle "compact".
 Return prCommentMarkdown and use it as a ready-to-paste PR comment.
 ```
 
 #### Quick copy: GitHub PR review
 
 ```text
-Run review_github_pr_impact with repoPath "/absolute/path/to/repo", prNumber 42, repo "owner/name", maxFiles 300, transitiveDepth 3, commentStyle "compact", and autoComment false.
+Run review_github_pr_impact with repoPath "/absolute/path/to/repo", prNumber 42, repo "owner/name", maxFiles 300, transitiveDepth 3, commentStyle "compact", autoComment false, and forceNewComment false.
 Return riskLevel, symbolLevelChanges, and prCommentMarkdown.
 ```
+
+Set `autoComment true` in CI to maintain a single upserted Code Digger review comment on the PR.
 
 #### Quick copy: Graph DB queries
 
@@ -1138,7 +1149,9 @@ export CODE_DIGGER_EMBEDDING_BATCH_SIZE=64
 Behavior:
 
 - If remote config is complete, indexing uses remote embeddings.
-- If remote calls fail or config is incomplete, Code Digger falls back to local embeddings.
+- Query embeddings are generated only when provider metadata matches the active index provider.
+- If any remote batch fails, Code Digger falls back to local embeddings for the full indexing run (single consistent vector space).
+- If remote config is incomplete, Code Digger falls back to local embeddings.
 - Index stats include active provider metadata under `stats.embeddings`.
 
 ## Python support details

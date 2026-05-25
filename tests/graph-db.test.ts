@@ -85,4 +85,33 @@ describe("graph db backing", () => {
     assert.equal(after.nodeCount, 1);
     assert.equal(after.edgeCount, 0);
   });
+
+  it("reports ambiguous suffix matches", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "code-digger-graph-"));
+    const f1 = path.join(repoRoot, "packages/a/src/index.ts");
+    const f2 = path.join(repoRoot, "packages/b/src/index.ts");
+    const forward = new Map<string, Set<string>>([
+      [f1, new Set<string>()],
+      [f2, new Set<string>()]
+    ]);
+    const reverse = new Map<string, Set<string>>([
+      [f1, new Set<string>()],
+      [f2, new Set<string>()]
+    ]);
+    await saveGraphDb(repoRoot, forward, reverse);
+    const db = await loadGraphDb(repoRoot);
+    assert.ok(db);
+    const result = queryGraphDbNeighbors(db!, "src/index.ts", {
+      direction: "both",
+      depth: 2,
+      maxNodes: 50
+    }) as {
+      found: boolean;
+      ambiguous?: boolean;
+      candidates?: string[];
+    };
+    assert.equal(result.found, false);
+    assert.equal(result.ambiguous, true);
+    assert.ok((result.candidates ?? []).length >= 2);
+  });
 });

@@ -1,8 +1,10 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { loadGraphDb, PersistedGraphDb } from "./graphDb.js";
 import { RepoIndex } from "./types.js";
 
 const execFileAsync = promisify(execFile);
+const PR_COMMENT_MARKER = "<!-- code-digger-pr-impact-review -->";
 
 function bfsReachable(
   graph: Map<string, Set<string>>,
@@ -197,6 +199,7 @@ export function toPrCommentMarkdown(
   const sourceLine = opts.source ? `- **Source:** \`${opts.source}\`` : undefined;
   if (commentStyle === "compact") {
     const compactLines = [
+      PR_COMMENT_MARKER,
       "## PR Architecture Impact Review",
       "",
       `**Risk:** \`${report.riskLevel.toUpperCase()}\` (score: ${report.riskScore})`,
@@ -214,6 +217,7 @@ export function toPrCommentMarkdown(
   }
 
   const lines = [
+    PR_COMMENT_MARKER,
     "## PR Architecture Impact Review",
     "",
     `**Risk:** \`${report.riskLevel.toUpperCase()}\` (score: ${report.riskScore})`,
@@ -272,6 +276,50 @@ function resolveChangedFile(index: RepoIndex, changedPath: string): string | und
     return exact;
   }
   return [...index.files.keys()].find((path) => normalizePath(path).endsWith(`/${normalized}`));
+}
+
+function resolveChangedFileFromNodes(nodes: string[], changedPath: string): string | undefined {
+  const normalized = normalizePath(changedPath);
+  const exact = nodes.find((node) => normalizePath(node) === normalized);
+  if (exact) {
+    return exact;
+  }
+  const suffix = normalized.startsWith("/") ? normalized : `/${normalized}`;
+  const matches = nodes.filter((node) => normalizePath(node).endsWith(suffix));
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
+function bfsAdjacency(
+  adjacency: number[][],
+  starts: number[],
+  opts: { maxDepth: number; maxNodes: number }
+): number[] {
+  const visited = new Set<number>();
+  const queue: Array<{ node: number; depth: number }> = starts.map((node) => ({ node, depth: 0 }));
+
+  while (queue.length > 0 && visited.size < opts.maxNodes) {
+    const item = queue.shift();
+    if (!item) {
+      continue;
+    }
+    if (item.depth > opts.maxDepth) {
+      continue;
+    }
+    if (visited.has(item.node)) {
+      continue;
+    }
+    visited.add(item.node);
+    if (item.depth === opts.maxDepth) {
+      continue;
+    }
+    for (const next of adjacency[item.node] ?? []) {
+      if (!visited.has(next)) {
+        queue.push({ node: next, depth: item.depth + 1 });
+      }
+    }
+  }
+
+  return [...visited];
 }
 
 function buildChecklist(
@@ -485,6 +533,179 @@ export function analyzePrImpact(
   };
 }
 
+export function analyzePrImpactFromGraphDb(
+  db: PersistedGraphDb,
+  changedPaths: string[],
+  opts: {
+    transitiveDepth?: number;
+    maxNodes?: number;
+    symbolHints?: SymbolChangeMap;
+    commentStyle?: CommentStyle;
+  } = {}
+): object {
+  const transitiveDepth = Math.max(1, Math.min(4, opts.transitiveDepth ?? 3));
+  const maxNodes = Math.max(50, Math.min(800, opts.maxNodes ?? 350));
+  const changedResolved = changedPaths
+    .map((path) => resolveChangedFileFromNodes(db.nodes, path))
+    .filter((value): value is string => Boolean(value));
+  const unresolvedChangedFiles = changedPaths.filter((path) => !resolveChangedFileFromNodes(db.nodes, path));
+  const changedSet = new Set(changedResolved);
+  const indexByPath = new Map<string, number>(db.nodes.map((node, idx) => [node, idx]));
+  const startIdx = changedResolved
+    .map((path) => indexByPath.get(path))
+    .filter((value): value is number => value !== undefined);
+
+  const directDependencies = new Set<string>();
+  const directDependents = new Set<string>();
+  for (const idx of startIdx) {
+    for (const depIdx of db.forward[idx] ?? []) {
+      directDependencies.add(db.nodes[depIdx]);
+    }
+    for (const depIdx of db.reverse[idx] ?? []) {
+      directDependents.add(db.nodes[depIdx]);
+    }
+  }
+
+  const transitiveDependencies = bfsAdjacency(db.forward, startIdx, {
+    maxDepth: transitiveDepth,
+    maxNodes
+  })
+    .map((idx) => db.nodes[idx])
+    .filter((path) => !changedSet.has(path));
+  const transitiveDependents = bfsAdjacency(db.reverse, startIdx, {
+    maxDepth: transitiveDepth,
+    maxNodes
+  })
+    .map((idx) => db.nodes[idx])
+    .filter((path) => !changedSet.has(path));
+
+  const fanIn = db.reverse.map((users, idx) => ({ file: db.nodes[idx], fanIn: users.length }));
+  fanIn.sort((a, b) => b.fanIn - a.fanIn);
+  const hotspotSet = new Set(fanIn.slice(0, 20).map((entry) => entry.file));
+  const hotspotsTouched = changedResolved.filter((path) => hotspotSet.has(path));
+
+  const symbolLevelChanges = changedResolved
+    .map((file) => {
+      const hint = getSymbolHintForFile(opts.symbolHints, file);
+      if (!hint) {
+        return undefined;
+      }
+      return {
+        file,
+        symbols: [...hint.symbols].slice(0, 20),
+        hunkCount: hint.hunkCount,
+        addedLines: hint.addedLines,
+        removedLines: hint.removedLines
+      };
+    })
+    .filter(
+      (
+        item
+      ): item is {
+        file: string;
+        symbols: string[];
+        hunkCount: number;
+        addedLines: number;
+        removedLines: number;
+      } => Boolean(item)
+    );
+
+  const symbolRiskBoost = symbolLevelChanges.reduce((acc, entry) => {
+    return (
+      acc +
+      Math.min(18, entry.symbols.length * 2) +
+      Math.min(20, entry.hunkCount * 2) +
+      Math.min(12, Math.floor((entry.addedLines + entry.removedLines) / 25))
+    );
+  }, 0);
+
+  const riskScore =
+    changedResolved.length * 4 +
+    directDependencies.size +
+    directDependents.size * 2 +
+    transitiveDependencies.length +
+    transitiveDependents.length * 2 +
+    hotspotsTouched.length * 12 +
+    symbolRiskBoost;
+  const riskLevel = riskScore >= 80 ? "high" : riskScore >= 35 ? "moderate" : "low";
+
+  const checklist = buildChecklist(riskScore, changedPaths, hotspotsTouched, []);
+  if (symbolLevelChanges.length > 0) {
+    const top = symbolLevelChanges[0];
+    checklist.unshift(
+      `Review symbol-level changes around ${shortPath(top.file)} (${top.symbols.slice(0, 4).join(", ")}).`
+    );
+  }
+
+  const selected = new Set<string>(changedResolved);
+  for (const path of transitiveDependencies.slice(0, 8)) {
+    selected.add(path);
+  }
+  for (const path of transitiveDependents.slice(0, 8)) {
+    selected.add(path);
+  }
+  const ids = new Map<string, string>();
+  const mermaidLines = ["graph TD"];
+  let counter = 1;
+  for (const node of selected) {
+    ids.set(node, `N${counter}`);
+    mermaidLines.push(`  N${counter}["${shortPath(node)}"]`);
+    counter += 1;
+  }
+  for (const source of selected) {
+    const srcId = ids.get(source);
+    const srcIdx = indexByPath.get(source);
+    if (!srcId || srcIdx === undefined) {
+      continue;
+    }
+    for (const depIdx of db.forward[srcIdx] ?? []) {
+      const depPath = db.nodes[depIdx];
+      if (!selected.has(depPath)) {
+        continue;
+      }
+      const depId = ids.get(depPath);
+      if (depId) {
+        mermaidLines.push(`  ${srcId} --> ${depId}`);
+      }
+    }
+  }
+
+  const report: PrImpactCoreReport = {
+    summary:
+      changedResolved.length === 0
+        ? "No changed files from the PR matched the persisted graph database."
+        : `PR touches ${changedResolved.length} files with ${riskLevel} architectural risk (graph-db mode).`,
+    changedFiles: changedPaths,
+    mappedChangedFiles: changedResolved,
+    unresolvedChangedFiles,
+    domainsTouched: [],
+    impact: {
+      directDependencies: [...directDependencies].slice(0, 200),
+      directDependents: [...directDependents].slice(0, 200),
+      transitiveDependencies: transitiveDependencies.slice(0, 300),
+      transitiveDependents: transitiveDependents.slice(0, 300),
+      hotspotsTouched,
+      symbolLevelChanges
+    },
+    riskScore,
+    riskLevel,
+    reviewChecklist: checklist,
+    diagram: {
+      type: "mermaid",
+      mermaid: mermaidLines.join("\n")
+    }
+  };
+
+  return {
+    ...report,
+    mode: "graph-db-fallback",
+    prCommentMarkdown: toPrCommentMarkdown(report, {
+      source: "graph_db_fallback",
+      commentStyle: opts.commentStyle
+    })
+  };
+}
+
 async function listChangedFilesFromGit(
   repoPath: string,
   baseRef: string,
@@ -532,7 +753,7 @@ async function getUnifiedDiffFromGit(repoPath: string, baseRef: string, headRef:
 }
 
 export async function reviewPrImpact(
-  index: RepoIndex,
+  index: RepoIndex | null,
   opts: {
     repoPath: string;
     baseRef?: string;
@@ -549,12 +770,26 @@ export async function reviewPrImpact(
   const unifiedDiff = await getUnifiedDiffFromGit(opts.repoPath, baseRef, headRef);
   const symbolHints = extractSymbolChangeHintsFromDiff(unifiedDiff);
   const selected = changed.slice(0, maxFiles);
-  const analysis = analyzePrImpact(index, selected, {
-    transitiveDepth: opts.transitiveDepth ?? 3,
-    maxNodes: 400,
-    symbolHints,
-    commentStyle: opts.commentStyle ?? "full"
-  });
+  const analysis = index
+    ? analyzePrImpact(index, selected, {
+        transitiveDepth: opts.transitiveDepth ?? 3,
+        maxNodes: 400,
+        symbolHints,
+        commentStyle: opts.commentStyle ?? "full"
+      })
+    : analyzePrImpactFromGraphDb(
+        (await loadGraphDb(opts.repoPath)) ??
+          (() => {
+            throw new Error("No index in memory and persisted graph DB missing. Run ingest_repo first.");
+          })(),
+        selected,
+        {
+          transitiveDepth: opts.transitiveDepth ?? 3,
+          maxNodes: 400,
+          symbolHints,
+          commentStyle: opts.commentStyle ?? "full"
+        }
+      );
   const report = {
     refs: { baseRef, headRef },
     changedFileCount: changed.length,
@@ -573,27 +808,44 @@ export async function reviewPrImpact(
   };
 }
 
-export function reviewPrImpactFromFiles(
-  index: RepoIndex,
+export async function reviewPrImpactFromFiles(
+  index: RepoIndex | null,
   opts: {
     changedFiles: string[];
     transitiveDepth?: number;
     maxFiles?: number;
     unifiedDiff?: string;
     commentStyle?: CommentStyle;
+    rootPath?: string;
   }
-): object {
+): Promise<object> {
   const maxFiles = Math.max(1, Math.min(1000, opts.maxFiles ?? 300));
   const selected = opts.changedFiles.slice(0, maxFiles);
   const symbolHints = opts.unifiedDiff
     ? extractSymbolChangeHintsFromDiff(opts.unifiedDiff)
     : undefined;
-  const analysis = analyzePrImpact(index, selected, {
-    transitiveDepth: opts.transitiveDepth ?? 3,
-    maxNodes: 450,
-    symbolHints,
-    commentStyle: opts.commentStyle ?? "full"
-  }) as PrImpactCoreReport & { prCommentMarkdown?: string };
+  const analysis = (
+    index
+      ? analyzePrImpact(index, selected, {
+          transitiveDepth: opts.transitiveDepth ?? 3,
+          maxNodes: 450,
+          symbolHints,
+          commentStyle: opts.commentStyle ?? "full"
+        })
+      : analyzePrImpactFromGraphDb(
+          (await loadGraphDb(opts.rootPath ?? "")) ??
+            (() => {
+              throw new Error("No index in memory and persisted graph DB missing. Run ingest_repo first.");
+            })(),
+          selected,
+          {
+            transitiveDepth: opts.transitiveDepth ?? 3,
+            maxNodes: 450,
+            symbolHints,
+            commentStyle: opts.commentStyle ?? "full"
+          }
+        )
+  ) as PrImpactCoreReport & { prCommentMarkdown?: string };
   return {
     changedFileCount: opts.changedFiles.length,
     analyzedFileCount: selected.length,
@@ -621,8 +873,67 @@ interface GithubPrView {
   files: Array<{ path: string }>;
 }
 
+interface GithubIssueComment {
+  id: number;
+  body: string;
+}
+
+async function resolveRepoSlug(repoPath: string, repo?: string): Promise<string> {
+  if (repo) {
+    return repo;
+  }
+  const raw = await ghExec(repoPath, ["repo", "view", "--json", "nameWithOwner"]);
+  const parsed = JSON.parse(raw) as { nameWithOwner?: string };
+  if (!parsed.nameWithOwner) {
+    throw new Error("Could not resolve GitHub repository slug from gh.");
+  }
+  return parsed.nameWithOwner;
+}
+
+async function listIssueComments(repoPath: string, repoSlug: string, prNumber: number): Promise<GithubIssueComment[]> {
+  const raw = await ghExec(
+    repoPath,
+    ["api", `repos/${repoSlug}/issues/${prNumber}/comments`, "--paginate"],
+    repoSlug
+  );
+  const parsed = JSON.parse(raw) as GithubIssueComment[];
+  return Array.isArray(parsed) ? parsed : [];
+}
+
+async function upsertPrImpactComment(
+  repoPath: string,
+  repoSlug: string,
+  prNumber: number,
+  body: string,
+  forceNewComment = false
+): Promise<"created" | "updated"> {
+  if (forceNewComment) {
+    await ghExec(repoPath, ["pr", "comment", String(prNumber), "--body", body], repoSlug);
+    return "created";
+  }
+  const comments = await listIssueComments(repoPath, repoSlug, prNumber);
+  const existing = comments.find((comment) => String(comment.body ?? "").includes(PR_COMMENT_MARKER));
+  if (existing) {
+    await ghExec(
+      repoPath,
+      [
+        "api",
+        `repos/${repoSlug}/issues/comments/${existing.id}`,
+        "-X",
+        "PATCH",
+        "-f",
+        `body=${body}`
+      ],
+      repoSlug
+    );
+    return "updated";
+  }
+  await ghExec(repoPath, ["pr", "comment", String(prNumber), "--body", body], repoSlug);
+  return "created";
+}
+
 export async function reviewGithubPrImpact(
-  index: RepoIndex,
+  index: RepoIndex | null,
   opts: {
     repoPath: string;
     prNumber: number;
@@ -630,39 +941,45 @@ export async function reviewGithubPrImpact(
     maxFiles?: number;
     transitiveDepth?: number;
     autoComment?: boolean;
+    forceNewComment?: boolean;
     commentStyle?: CommentStyle;
   }
 ): Promise<object> {
   const prNumber = Math.max(1, Math.floor(opts.prNumber));
+  const repoSlug = await resolveRepoSlug(opts.repoPath, opts.repo);
   const viewRaw = await ghExec(
     opts.repoPath,
     ["pr", "view", String(prNumber), "--json", "number,title,baseRefName,headRefName,url,files"],
-    opts.repo
+    repoSlug
   );
   const view = JSON.parse(viewRaw) as GithubPrView;
   const changedFiles = (view.files ?? []).map((file) => file.path).filter(Boolean);
   const diffRaw = await ghExec(
     opts.repoPath,
     ["pr", "diff", String(prNumber), "--patch", "--color=never"],
-    opts.repo
+    repoSlug
   );
 
-  const analysis = reviewPrImpactFromFiles(index, {
+  const analysis = await reviewPrImpactFromFiles(index, {
     changedFiles,
     maxFiles: opts.maxFiles ?? 300,
     transitiveDepth: opts.transitiveDepth ?? 3,
     unifiedDiff: diffRaw,
-    commentStyle: opts.commentStyle ?? "full"
+    commentStyle: opts.commentStyle ?? "full",
+    rootPath: opts.repoPath
   }) as { prCommentMarkdown?: string };
 
   let commentPosted = false;
+  let commentAction: "none" | "created" | "updated" = "none";
   if (opts.autoComment) {
     const body = String(analysis.prCommentMarkdown ?? "").trim();
     if (body) {
-      await ghExec(
+      commentAction = await upsertPrImpactComment(
         opts.repoPath,
-        ["pr", "comment", String(prNumber), "--body", body],
-        opts.repo
+        repoSlug,
+        prNumber,
+        body,
+        Boolean(opts.forceNewComment)
       );
       commentPosted = true;
     }
@@ -677,7 +994,9 @@ export async function reviewGithubPrImpact(
       headRef: view.headRefName
     },
     autoCommentRequested: Boolean(opts.autoComment),
+    forceNewComment: Boolean(opts.forceNewComment),
     commentPosted,
+    commentAction,
     ...analysis
   };
 }
